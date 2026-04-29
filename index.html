@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bunny Dash: Forest Escape</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #1a1a2e;
+    color: #f4e8c1;
+    font-family: "Courier New", monospace;
+    overflow: hidden;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  h1 {
+    font-size: 28px;
+    letter-spacing: 4px;
+    color: #ffd27f;
+    margin: 8px 0 4px;
+    text-shadow: 2px 2px 0 #6d2e00;
+  }
+  p.sub { margin: 0 0 10px; color: #c9a86a; font-size: 13px; letter-spacing: 2px; }
+  #wrap {
+    position: relative;
+    border: 4px solid #8a5a2b;
+    box-shadow: 0 0 0 4px #3c2310, 0 10px 30px rgba(0,0,0,0.6);
+    background: #7cc36a;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    cursor: pointer;
+  }
+  #hud {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: 8px 14px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    color: #fff;
+    text-shadow: 2px 2px 0 #000;
+    pointer-events: none;
+    letter-spacing: 2px;
+  }
+  #hud .center { flex: 1; text-align: center; }
+  #hud.faded { opacity: 0.25; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 20, 10, 0.78);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    text-align: center;
+    color: #fff;
+    text-shadow: 2px 2px 0 #000;
+    padding: 20px;
+  }
+  #overlay h2 { font-size: 40px; margin: 6px; letter-spacing: 4px; color: #ffd27f; }
+  #overlay h3 { font-size: 18px; margin: 0 0 10px; letter-spacing: 4px; color: #c9a86a; }
+  #overlay p { max-width: 520px; line-height: 1.5; }
+  button {
+    margin: 14px 6px 0;
+    padding: 10px 22px;
+    background: #ffd27f;
+    color: #3c2310;
+    border: 3px solid #3c2310;
+    font-family: inherit;
+    font-weight: bold;
+    font-size: 16px;
+    letter-spacing: 3px;
+    cursor: pointer;
+    box-shadow: 4px 4px 0 #3c2310;
+  }
+  button.alt { background: #c9a86a; color: #fff; }
+  button:hover { background: #ffe7b0; }
+  button.alt:hover { background: #d8b87a; }
+  .hidden { display: none !important; }
+  footer { margin-top: 10px; font-size: 11px; color: #7a6a48; letter-spacing: 2px; }
+</style>
+</head>
+<body>
+  <h1>BUNNY DASH: FOREST ESCAPE</h1>
+  <p class="sub">CLOVER&apos;S TALE</p>
+  <div id="wrap">
+    <canvas id="game" width="800" height="560"></canvas>
+    <div id="hud" class="faded">
+      <div>CARROTS: <span id="score">0</span> / <span id="target">10</span></div>
+      <div class="center">LEVEL <span id="level">1</span> / 5</div>
+      <div>FOX: <span id="dist">--</span></div>
+    </div>
+    <div id="overlay" class="hidden"></div>
+  </div>
+  <footer>ARROWS TO MOVE &nbsp; • &nbsp; M TO MUTE &nbsp; • &nbsp; R TO RESTART LEVEL</footer>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const scoreEl = document.getElementById('score');
+  const targetEl = document.getElementById('target');
+  const levelEl = document.getElementById('level');
+  const distEl = document.getElementById('dist');
+  const overlay = document.getElementById('overlay');
+  const hud = document.getElementById('hud');
+
+  // -------- LEVEL CONFIG --------
+  // Speeds in px/sec. Fox is PATH-LOCKED — it follows the dirt path's arc, so it
+  // can never cut the inside of a turn. It only leaves the path when the bunny
+  // is off-path AND the fox is right at the bunny's path-projection; in that
+  // case it switches to `foxGrass` speed (slightly faster than fox path speed)
+  // and pursues directly. This keeps the "4+ seconds in grass = caught" rule
+  // intact while preventing corner-cutting on curves.
+  //   - Bunny path > Fox path  (bunny pulls away on straightaways)
+  //   - Fox grass > Bunny grass (fox closes when bunny strays)
+  const LEVELS = [
+    { name: 'STROLL',   bunnyPath: 160, bunnyGrass: 95,  fox: 90,  foxGrass: 110, target: 10, visible: 10, respawn: 0,    musicMs: 3400,
+      path: { amp1: 70,  amp2: 30, freq1: 0.6,  freq2: 1.1,  phase: 0.0, segs: 16 } },
+    { name: 'TROT',     bunnyPath: 180, bunnyGrass: 100, fox: 105, foxGrass: 125, target: 10, visible: 10, respawn: 0,    musicMs: 3000,
+      path: { amp1: 95,  amp2: 40, freq1: 0.75, freq2: 1.4,  phase: 1.2, segs: 18 } },
+    { name: 'SCRAMBLE', bunnyPath: 200, bunnyGrass: 110, fox: 120, foxGrass: 142, target: 12, visible: 8,  respawn: 1.0,  musicMs: 2700,
+      path: { amp1: 115, amp2: 55, freq1: 0.9,  freq2: 1.7,  phase: 2.4, segs: 20 } },
+    { name: 'DASH',     bunnyPath: 220, bunnyGrass: 120, fox: 135, foxGrass: 160, target: 14, visible: 7,  respawn: 1.0,  musicMs: 2400,
+      path: { amp1: 135, amp2: 30, freq1: 1.05, freq2: 2.0,  phase: 0.5, segs: 22 } },
+    { name: 'PANIC',    bunnyPath: 240, bunnyGrass: 130, fox: 150, foxGrass: 178, target: 16, visible: 6,  respawn: 1.0,  musicMs: 2100,
+      path: { amp1: 105, amp2: 75, freq1: 1.3,  freq2: 0.95, phase: 3.7, segs: 24 } },
+  ];
+
+  // -------- WORLD --------
+  let pathPoints = [];
+  let pathSegLens = []; // arc length of each segment
+  let pathLength = 0;   // total arc length
+  const PATH_HALF_WIDTH = 24;
+  const PATH_BUFFER = 6;
+
+  function buildPath(p) {
+    pathPoints = [];
+    const segs = p.segs;
+    for (let i = 0; i <= segs; i++) {
+      const x = (i / segs) * (W - 80) + 40;
+      const yRaw = H/2 + Math.sin(i * p.freq1 + p.phase) * p.amp1 + Math.cos(i * p.freq2 + p.phase) * p.amp2;
+      const y = Math.max(70, Math.min(H - 70, yRaw));
+      pathPoints.push({x, y});
+    }
+    pathSegLens = [];
+    pathLength = 0;
+    for (let i = 1; i < pathPoints.length; i++) {
+      const a = pathPoints[i-1], b = pathPoints[i];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      pathSegLens.push(len);
+      pathLength += len;
+    }
+  }
+
+  function pathYAt(x) {
+    for (let i = 0; i < pathPoints.length - 1; i++) {
+      const a = pathPoints[i], b = pathPoints[i+1];
+      if (x >= a.x && x <= b.x) {
+        const t = (x - a.x) / (b.x - a.x);
+        return a.y + (b.y - a.y) * t;
+      }
+    }
+    return pathPoints[pathPoints.length - 1].y;
+  }
+
+  function isOnPath(x, y) {
+    if (x < 40 || x > W - 40) return false;
+    const py = pathYAt(x);
+    return Math.abs(y - py) <= PATH_HALF_WIDTH + PATH_BUFFER;
+  }
+
+  // Convert an arc-length distance from path start to an (x,y) point on the path.
+  // Negative or over-length values extrapolate along the first/last segment direction.
+  function pathPosFromArc(arc) {
+    if (pathPoints.length < 2) return { x: 0, y: 0 };
+    if (arc <= 0) {
+      const a = pathPoints[0], b = pathPoints[1];
+      const segLen = pathSegLens[0] || 1;
+      const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+      return { x: a.x + ux * arc, y: a.y + uy * arc };
+    }
+    let s = 0;
+    for (let i = 1; i < pathPoints.length; i++) {
+      const segLen = pathSegLens[i-1];
+      if (s + segLen >= arc) {
+        const a = pathPoints[i-1], b = pathPoints[i];
+        const frac = (arc - s) / segLen;
+        return { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
+      }
+      s += segLen;
+    }
+    // beyond end: extrapolate
+    const n = pathPoints.length;
+    const a = pathPoints[n-2], b = pathPoints[n-1];
+    const segLen = pathSegLens[pathSegLens.length - 1] || 1;
+    const ux = (b.x - a.x) / segLen, uy = (b.y - a.y) / segLen;
+    const over = arc - s;
+    return { x: b.x + ux * over, y: b.y + uy * over };
+  }
+
+  // Closest arc-length on the path to a given point (x,y). Used to find where
+  // along the path the bunny is, and to re-anchor the fox's arc after off-path
+  // chase segments.
+  function arcFromPos(x, y) {
+    let bestArc = 0, bestD2 = Infinity, accum = 0;
+    for (let i = 1; i < pathPoints.length; i++) {
+      const a = pathPoints[i-1], b = pathPoints[i];
+      const segLen = pathSegLens[i-1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      let t = 0;
+      if (segLen > 0) {
+        t = ((x - a.x) * dx + (y - a.y) * dy) / (segLen * segLen);
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+      }
+      const px = a.x + dx * t;
+      const py = a.y + dy * t;
+      const ddx = x - px, ddy = y - py;
+      const d2 = ddx * ddx + ddy * ddy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        bestArc = accum + segLen * t;
+      }
+      accum += segLen;
+    }
+    return bestArc;
+  }
+
+  // -------- DECORATIONS --------
+  let trees = [], bushes = [], flowers = [];
+  function rand(a,b){ return a + Math.random() * (b - a); }
+  function scatter() {
+    trees = []; bushes = []; flowers = [];
+    for (let i = 0; i < 28; i++) {
+      const x = rand(20, W - 20);
+      const py = pathYAt(x);
+      const above = Math.random() < 0.5;
+      const y = above ? rand(30, py - 80) : rand(py + 80, H - 30);
+      if (y < 20 || y > H - 20) continue;
+      trees.push({x, y, h: rand(40, 70)});
+    }
+    for (let i = 0; i < 40; i++) {
+      const x = rand(10, W - 10);
+      const py = pathYAt(x);
+      const above = Math.random() < 0.5;
+      const y = above ? rand(20, py - 55) : rand(py + 55, H - 20);
+      if (y < 10 || y > H - 10) continue;
+      bushes.push({x, y, r: rand(10, 18)});
+    }
+    const palette = ['#ff6b9d','#ffffff','#ffdc4a','#c586ff','#ff8a4a'];
+    for (let i = 0; i < 70; i++) {
+      const x = rand(10, W - 10);
+      const py = pathYAt(x);
+      const above = Math.random() < 0.5;
+      const y = above ? rand(15, py - 45) : rand(py + 45, H - 15);
+      if (y < 8 || y > H - 8) continue;
+      flowers.push({x, y, c: palette[(Math.random()*palette.length)|0]});
+    }
+  }
+
+  // -------- CARROTS --------
+  let carrots = [];
+  function placeCarrots(count) {
+    carrots = [];
+    for (let i = 0; i < count; i++) {
+      const x = 100 + (i * (W - 200) / Math.max(1, count - 1));
+      const y = pathYAt(x) + (Math.random() < 0.5 ? -10 : 10);
+      carrots.push({x, y, eaten: false, respawnAt: 0});
+    }
+  }
+
+  function respawnCarrot(c) {
+    for (let tries = 0; tries < 12; tries++) {
+      const x = rand(80, W - 80);
+      if (Math.abs(x - bunny.x) > 140) {
+        c.x = x;
+        c.y = pathYAt(x) + (Math.random() < 0.5 ? -10 : 10);
+        c.eaten = false;
+        c.respawnAt = 0;
+        return;
+      }
+    }
+    const x = rand(80, W - 80);
+    c.x = x;
+    c.y = pathYAt(x) + (Math.random() < 0.5 ? -10 : 10);
+    c.eaten = false;
+    c.respawnAt = 0;
+  }
+
+  // -------- BUNNY / FOX --------
+  // Bigger initial buffer + countdown gives the player real reaction time.
+  const BUNNY_START_X = 90;
+  const FOX_START_ARC = -80; // 80px before the path's start (extrapolated lead-in)
+  const bunny = { x: BUNNY_START_X, y: 0, dir: 1, hopT: 0 };
+  const fox   = { x: 0, y: 0, arc: FOX_START_ARC, pounceT: 0 };
+
+  // -------- INPUT --------
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (e.key === 'm' || e.key === 'M') toggleMute();
+    if (e.key === 'r' || e.key === 'R') {
+      if (state === 'playing' || state === 'lost' || state === 'countdown') retryCurrentLevel();
+    }
+    if (state === 'intro' && (e.key === ' ' || e.key === 'Enter')) {
+      progressIntro();
+      e.preventDefault();
+    }
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  canvas.addEventListener('click', () => {
+    if (state === 'intro') progressIntro();
+  });
+
+  // -------- AUDIO (WebAudio, no external files) --------
+  let audioCtx = null;
+  let muted = false;
+  let musicGain;
+  let musicInterval = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      musicGain = audioCtx.createGain();
+      musicGain.gain.value = 0.14;
+      musicGain.connect(audioCtx.destination);
+    }
+  }
+  function toggleMute() {
+    muted = !muted;
+    if (audioCtx && musicGain) musicGain.gain.value = muted ? 0 : 0.14;
+  }
+
+  const bassPattern = [
+    {n: 146.83, d: 0.28}, {n: 164.81, d: 0.28}, {n: 174.61, d: 0.28},
+    {n: 185.00, d: 0.28}, {n: 196.00, d: 0.55}, {n: 185.00, d: 0.28},
+    {n: 174.61, d: 0.55}, {n: 146.83, d: 0.85},
+  ];
+  function playBassNote(freq, dur, when) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(0.25, when + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    o.connect(g); g.connect(musicGain);
+    o.start(when); o.stop(when + dur + 0.05);
+  }
+  function playHighStab(freq, when) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(0.08, when + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
+    const f = audioCtx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 1200;
+    o.connect(f); f.connect(g); g.connect(musicGain);
+    o.start(when); o.stop(when + 0.25);
+  }
+  function tickMusic() {
+    if (!audioCtx || muted) return;
+    const now = audioCtx.currentTime;
+    let t = now + 0.05;
+    const tempoScale = LEVELS[level].musicMs / 3400;
+    bassPattern.forEach((note, i) => {
+      const d = note.d * tempoScale;
+      playBassNote(note.n, d * 0.95, t);
+      if (i % 2 === 1) playHighStab(note.n * 4, t + d * 0.5);
+      t += d;
+    });
+  }
+  function startMusic() {
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (musicInterval) clearInterval(musicInterval);
+    tickMusic();
+    musicInterval = setInterval(tickMusic, LEVELS[level].musicMs);
+  }
+  function restartMusic() {
+    if (!audioCtx) return;
+    if (musicInterval) clearInterval(musicInterval);
+    tickMusic();
+    musicInterval = setInterval(tickMusic, LEVELS[level].musicMs);
+  }
+
+  function playCrunch() {
+    ensureAudio();
+    if (muted) return;
+    const now = audioCtx.currentTime;
+    const bufferSize = audioCtx.sampleRate * 0.18;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    const f = audioCtx.createBiquadFilter();
+    f.type = 'bandpass'; f.frequency.value = 1800; f.Q.value = 1.5;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.6, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    src.connect(f); f.connect(g); g.connect(audioCtx.destination);
+    src.start(); src.stop(now + 0.2);
+  }
+
+  function playAww() {
+    ensureAudio();
+    if (muted) return;
+    const now = audioCtx.currentTime;
+    const o1 = audioCtx.createOscillator();
+    const o2 = audioCtx.createOscillator();
+    o1.type = 'sine'; o2.type = 'sine';
+    o1.frequency.setValueAtTime(520, now);
+    o1.frequency.exponentialRampToValueAtTime(180, now + 1.2);
+    o2.frequency.setValueAtTime(260, now);
+    o2.frequency.exponentialRampToValueAtTime(90, now + 1.2);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.35, now + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+    const f = audioCtx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 900;
+    o1.connect(f); o2.connect(f); f.connect(g); g.connect(audioCtx.destination);
+    o1.start(now); o2.start(now);
+    o1.stop(now + 1.3); o2.stop(now + 1.3);
+  }
+
+  function playLevelChime() {
+    ensureAudio();
+    if (muted) return;
+    const now = audioCtx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'triangle';
+      o.frequency.value = f;
+      const t0 = now + i * 0.09;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.22, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(t0); o.stop(t0 + 0.4);
+    });
+  }
+
+  function playCountBeep(highPitch) {
+    ensureAudio();
+    if (muted) return;
+    const now = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.value = highPitch ? 880 : 440;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+    const f = audioCtx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 1800;
+    o.connect(f); f.connect(g); g.connect(audioCtx.destination);
+    o.start(now); o.stop(now + 0.22);
+  }
+
+  // -------- STORY (animated bottom-of-screen narration) --------
+  // Backstory: final iteration from the Literature Milestone — Clover the Courageous.
+  const STORY_LINES = [
+    "Clover was born in the heart of a peaceful forest —",
+    "towering green trees, wildflowers, mossy paths, sparkling streams.",
+    "In spring and summer, the forest glows pink, yellow, and purple.",
+    "But despite its beauty, the forest has always been dangerous.",
+    "Foxes patrol the paths, searching for prey.",
+    "Food has become harder to find.",
+    "Growing up here taught Clover to be alert, determined, and brave.",
+    "Then came stories of a legendary carrot patch …",
+    "… leading to a hidden meadow where no fox can enter.",
+    "Clover decides to risk everything —",
+    "to protect their home, and bring hope back to the forest.",
+  ];
+  const STORY_FADE_IN = 0.45;
+  const STORY_HOLD = 2.4;
+  const STORY_FADE_OUT = 0.45;
+  const STORY_PER_LINE = STORY_FADE_IN + STORY_HOLD + STORY_FADE_OUT; // ~3.3s
+  const STORY_TOTAL = STORY_LINES.length * STORY_PER_LINE;
+  let storyT = 0;
+
+  function progressIntro() {
+    if (state !== 'intro') return;
+    if (storyT < STORY_TOTAL) {
+      // First click/space: fast-forward to the "begin" prompt
+      storyT = STORY_TOTAL;
+    } else {
+      // Second click/space: actually start
+      ensureAudio();
+      startMusic();
+      hud.classList.remove('faded');
+      beginCurrentLevel(true);
+    }
+  }
+
+  // -------- INTRO CINEMATIC WORLD --------
+  // A wide virtual world the camera pans through during the story.
+  // Different sections match the story beats: bright forest -> danger -> hope.
+  const INTRO_WORLD_W = 2400;
+  let introTrees = [], introBushes = [], introFlowers = [], introStones = [];
+
+  function buildIntroWorld() {
+    introTrees = []; introBushes = []; introFlowers = []; introStones = [];
+    // Trees scattered with denser, darker patch in the danger middle
+    let x = 30;
+    while (x < INTRO_WORLD_W) {
+      const inDark = (x > 1180 && x < 1850);
+      introTrees.push({ x, y: rand(60, H - 110), h: rand(50, 90), dark: inDark });
+      x += rand(48, 130);
+    }
+    for (let i = 0; i < 70; i++) {
+      introBushes.push({ x: rand(10, INTRO_WORLD_W - 10), y: rand(60, H - 80), r: rand(10, 18) });
+    }
+    // Mossy stones cluster early (peaceful forest section)
+    for (let i = 0; i < 14; i++) {
+      introStones.push({ x: rand(50, 1100), y: rand(H * 0.66, H - 90), r: rand(7, 15) });
+    }
+    // Flowers: dense in bright start + bright end, sparse in the dark middle
+    const palette = ['#ff6b9d','#ffffff','#ffdc4a','#c586ff','#ff8a4a'];
+    for (let i = 0; i < 240; i++) {
+      const r = Math.random();
+      let xx;
+      if (r < 0.50) xx = rand(0, 1180);
+      else if (r < 0.62) xx = rand(1180, 1850);
+      else xx = rand(1850, INTRO_WORLD_W);
+      introFlowers.push({ x: xx, y: rand(40, H - 40), c: palette[(Math.random()*palette.length)|0] });
+    }
+  }
+
+  function lerpHex(a, b, t) {
+    const ra = parseInt(a.slice(1,3),16), ga = parseInt(a.slice(3,5),16), ba = parseInt(a.slice(5,7),16);
+    const rb = parseInt(b.slice(1,3),16), gb = parseInt(b.slice(3,5),16), bb = parseInt(b.slice(5,7),16);
+    return `rgb(${Math.round(ra+(rb-ra)*t)},${Math.round(ga+(gb-ga)*t)},${Math.round(ba+(bb-ba)*t)})`;
+  }
+
+  // Sky/ground key colors per story phase
+  const SKY_KEYS = [
+    { t: 0.00, top: '#ffd6a8', bot: '#a4dd86' }, // sunrise birth
+    { t: 0.20, top: '#bee3ff', bot: '#92d075' }, // bright spring day
+    { t: 0.40, top: '#c8c4b6', bot: '#74a060' }, // overcast
+    { t: 0.55, top: '#5a5e6a', bot: '#3a4d36' }, // dim danger
+    { t: 0.68, top: '#3f3a4a', bot: '#34442e' }, // dark/dusky
+    { t: 0.85, top: '#ffd28a', bot: '#7cc36a' }, // golden hope
+    { t: 1.00, top: '#fff5c6', bot: '#a4e58c' }, // bright meadow
+  ];
+  function skyAt(t) {
+    for (let i = 0; i < SKY_KEYS.length - 1; i++) {
+      const a = SKY_KEYS[i], b = SKY_KEYS[i+1];
+      if (t >= a.t && t <= b.t) {
+        const lt = (t - a.t) / Math.max(0.0001, (b.t - a.t));
+        return { top: lerpHex(a.top, b.top, lt), bot: lerpHex(a.bot, b.bot, lt) };
+      }
+    }
+    return SKY_KEYS[SKY_KEYS.length - 1];
+  }
+
+  function drawIntroBunny(x, y, hopT) {
+    const hop = Math.sin(hopT) * 4;
+    const yy = y + hop;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 14, 14, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f5f0e6';
+    ctx.beginPath();
+    ctx.ellipse(x, yy, 14, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x + 9, yy - 5, 9, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(x + 6, yy - 18, 4, 11);
+    ctx.fillRect(x + 12, yy - 18, 4, 11);
+    ctx.fillStyle = '#ffc2d1';
+    ctx.fillRect(x + 7, yy - 17, 2, 8);
+    ctx.fillRect(x + 13, yy - 17, 2, 8);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(x + 12, yy - 6, 2, 2);
+    ctx.fillStyle = '#ff7f9e';
+    ctx.fillRect(x + 16, yy - 3, 2, 2);
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(x - 13, yy + 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e8dfcf';
+    ctx.fillRect(x - 7, yy + 9, 5, 4);
+    ctx.fillRect(x + 3, yy + 9, 5, 4);
+  }
+
+  function drawIntroFoxSilhouette(x, y, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#3a1f12';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 16, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x + 12, y - 4, 10, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 7, y - 10);  ctx.lineTo(x + 11, y - 18); ctx.lineTo(x + 14, y - 9);  ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 15, y - 10); ctx.lineTo(x + 19, y - 18); ctx.lineTo(x + 22, y - 8); ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x - 16, y, 8, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffec5e';
+    ctx.fillRect(x + 13, y - 5, 2, 2);
+    ctx.restore();
+  }
+
+  function drawLegendaryCarrot(x, y, t) {
+    const pulse = 0.6 + 0.4 * Math.sin(t * 3);
+    const grd = ctx.createRadialGradient(x, y, 4, x, y, 90);
+    grd.addColorStop(0, `rgba(255, 220, 100, ${0.55 * pulse})`);
+    grd.addColorStop(0.5, `rgba(255, 180, 70, ${0.22 * pulse})`);
+    grd.addColorStop(1, 'rgba(255,180,70,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(x, y, 90, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff8a1e';
+    ctx.beginPath();
+    ctx.moveTo(x - 16, y - 16);
+    ctx.lineTo(x + 16, y - 16);
+    ctx.lineTo(x, y + 26);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffc070';
+    ctx.fillRect(x - 10, y - 14, 4, 26);
+    ctx.fillStyle = '#4aa041';
+    ctx.fillRect(x - 11, y - 26, 4, 10);
+    ctx.fillRect(x - 2, y - 30, 4, 14);
+    ctx.fillRect(x + 7, y - 26, 4, 10);
+    ctx.fillStyle = `rgba(255, 255, 255, ${pulse})`;
+    for (let i = 0; i < 6; i++) {
+      const ang = t * 1.5 + i * Math.PI / 3;
+      const dist = 36 + Math.sin(t * 2 + i) * 10;
+      ctx.fillRect(x + Math.cos(ang) * dist - 1, y + Math.sin(ang) * dist - 1, 3, 3);
+    }
+  }
+
+  function drawSunRays(intensity) {
+    ctx.save();
+    ctx.globalAlpha = 0.35 * intensity;
+    ctx.fillStyle = '#fff5b8';
+    for (let i = 0; i < 9; i++) {
+      ctx.save();
+      ctx.translate(W - 80, 30);
+      ctx.rotate(-Math.PI / 4 + i * 0.06);
+      ctx.fillRect(0, -6, 700, 12);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawIntroScene() {
+    const t = Math.min(1, storyT / STORY_TOTAL);
+    const cam = t * (INTRO_WORLD_W - W);
+
+    // Sky + ground gradient
+    const sky = skyAt(t);
+    const grd = ctx.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, sky.top);
+    grd.addColorStop(1, sky.bot);
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, W, H);
+
+    // Distant rolling hills (slow parallax)
+    const hillCam1 = cam * 0.22;
+    ctx.fillStyle = 'rgba(60, 100, 60, 0.5)';
+    for (let i = -1; i < 9; i++) {
+      const hx = i * 380 - (hillCam1 % 380);
+      ctx.beginPath();
+      ctx.ellipse(hx, H * 0.55 + 30, 280, 80, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Mid-distance hills (medium parallax)
+    const hillCam2 = cam * 0.5;
+    ctx.fillStyle = 'rgba(45, 85, 50, 0.7)';
+    for (let i = -1; i < 9; i++) {
+      const hx = i * 280 - (hillCam2 % 280);
+      ctx.beginPath();
+      ctx.ellipse(hx, H * 0.62, 200, 60, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Bushes
+    introBushes.forEach(b => {
+      const sx = b.x - cam;
+      if (sx < -40 || sx > W + 40) return;
+      drawBush({ x: sx, y: b.y, r: b.r });
+    });
+
+    // Mossy stones (peaceful forest section only)
+    introStones.forEach(s => {
+      const sx = s.x - cam;
+      if (sx < -30 || sx > W + 30) return;
+      ctx.fillStyle = '#9aa0a8';
+      ctx.beginPath();
+      ctx.ellipse(sx, s.y, s.r, s.r * 0.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#5e8a52';
+      ctx.beginPath();
+      ctx.ellipse(sx - 2, s.y - s.r * 0.4, s.r * 0.55, s.r * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Trees (darker overlay for danger section)
+    introTrees.forEach(tr => {
+      const sx = tr.x - cam;
+      if (sx < -40 || sx > W + 40) return;
+      drawTree({ x: sx, y: tr.y, h: tr.h });
+      if (tr.dark) {
+        ctx.fillStyle = 'rgba(15, 18, 25, 0.35)';
+        ctx.beginPath();
+        ctx.arc(sx, tr.y, 30, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    // Flowers
+    introFlowers.forEach(f => {
+      const sx = f.x - cam;
+      if (sx < -10 || sx > W + 10) return;
+      drawFlower({ x: sx, y: f.y, c: f.c });
+    });
+
+    // Fox silhouettes lurk in danger window (world x 1300..1900)
+    if (cam > 1100 && cam < 2050) {
+      const a1 = 0.85;
+      const wobble = Math.sin(storyT * 1.4) * 22;
+      const fx1 = 1500 - cam + wobble;
+      drawIntroFoxSilhouette(fx1, H * 0.7, a1);
+      const fx2 = 1720 - cam + Math.sin(storyT * 1.1 + 1.7) * 18;
+      if (fx2 > -30 && fx2 < W + 30) drawIntroFoxSilhouette(fx2, H * 0.78, 0.7);
+    }
+
+    // Legendary carrot grows in as we near the end
+    if (cam > 1900) {
+      const cx = 2200 - cam;
+      if (cx > -30 && cx < W + 80) drawLegendaryCarrot(cx, H * 0.55, storyT);
+    }
+
+    // Hopeful sun rays in late phase
+    if (t > 0.7) drawSunRays(Math.min(1, (t - 0.7) / 0.3));
+
+    // Bunny stays at fixed screen pos, hops, grows from baby to full size
+    const sizeT = Math.min(1, t / 0.55);
+    const scale = 0.6 + 0.4 * sizeT;
+    ctx.save();
+    ctx.translate(180, H * 0.72);
+    ctx.scale(scale, scale);
+    drawIntroBunny(0, 0, storyT * 6);
+    ctx.restore();
+
+    // "Courage sparkles" around line 7 (Clover grows brave)
+    if (t > 0.55 && t < 0.72) {
+      const fade = 1 - Math.abs(t - 0.63) / 0.09;
+      if (fade > 0) {
+        ctx.fillStyle = `rgba(255, 220, 100, ${fade * 0.7})`;
+        for (let i = 0; i < 5; i++) {
+          const ang = storyT * 2 + i * (Math.PI * 2 / 5);
+          const dx = Math.cos(ang) * 34;
+          const dy = Math.sin(ang) * 34;
+          ctx.fillRect(180 + dx - 1.5, H * 0.72 - 20 + dy - 1.5, 3, 3);
+        }
+      }
+    }
+  }
+
+  // -------- GAME STATE --------
+  let state = 'intro';
+  let score = 0;
+  let level = 0;
+  let grassTime = 0;
+  const COUNTDOWN_MS = 5000;
+  let countdownEnd = 0;
+  let lastCountdownNumber = -1;
+
+  function loadLevel(idx) {
+    level = idx;
+    const L = LEVELS[level];
+    buildPath(L.path);
+    scatter();
+    placeCarrots(L.visible);
+    bunny.x = BUNNY_START_X; bunny.y = pathYAt(BUNNY_START_X); bunny.dir = 1; bunny.hopT = 0;
+    fox.arc = FOX_START_ARC;
+    const fp0 = pathPosFromArc(fox.arc);
+    fox.x = fp0.x; fox.y = fp0.y; fox.pounceT = 0;
+    score = 0;
+    grassTime = 0;
+    scoreEl.textContent = score;
+    targetEl.textContent = L.target;
+    levelEl.textContent = level + 1;
+    distEl.textContent = '--';
+  }
+
+  function startCountdown() {
+    state = 'countdown';
+    countdownEnd = performance.now() + COUNTDOWN_MS;
+    lastCountdownNumber = -1;
+    overlay.classList.add('hidden');
+  }
+
+  function beginCurrentLevel(fresh) {
+    if (fresh) loadLevel(0);
+    else loadLevel(level);
+    startCountdown();
+  }
+
+  function retryCurrentLevel() {
+    loadLevel(level);
+    startCountdown();
+    restartMusic();
+  }
+
+  function advanceLevel() {
+    if (level + 1 >= LEVELS.length) {
+      state = 'won';
+      showOverlay('YOU ESCAPED!', 'GAME COMPLETE',
+        `Clover cleared all 5 levels and reached the hidden meadow. The forest is safe.`,
+        [{ label: 'PLAY AGAIN', onClick: () => { loadLevel(0); startCountdown(); restartMusic(); } }]);
+      return;
+    }
+    loadLevel(level + 1);
+    startCountdown();
+    restartMusic();
+  }
+
+  function showOverlay(title, subtitle, msg, buttons) {
+    overlay.classList.remove('hidden');
+    const btnHtml = buttons.map((b, i) =>
+      `<button class="${b.alt ? 'alt' : ''}" data-idx="${i}">${b.label}</button>`
+    ).join('');
+    overlay.innerHTML = `
+      <h2>${title}</h2>
+      ${subtitle ? `<h3>${subtitle}</h3>` : ''}
+      <p>${msg}</p>
+      <div>${btnHtml}</div>
+    `;
+    overlay.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => buttons[parseInt(btn.dataset.idx, 10)].onClick());
+    });
+  }
+
+  // -------- UPDATE --------
+  function update(dt) {
+    if (state === 'intro') {
+      storyT += dt;
+      if (storyT > STORY_TOTAL + 9999) storyT = STORY_TOTAL + 9999;
+      return;
+    }
+    if (state === 'countdown') {
+      const remainMs = countdownEnd - performance.now();
+      const num = Math.ceil(remainMs / 1000);
+      if (num !== lastCountdownNumber && num >= 1 && num <= 5) {
+        playCountBeep(false);
+        lastCountdownNumber = num;
+      }
+      if (remainMs <= 0) {
+        playCountBeep(true);
+        state = 'playing';
+      }
+      return;
+    }
+    if (state !== 'playing') return;
+
+    const L = LEVELS[level];
+
+    let vx = 0, vy = 0;
+    if (keys['ArrowLeft'])  { vx = -1; bunny.dir = -1; }
+    if (keys['ArrowRight']) { vx =  1; bunny.dir = 1; }
+    if (keys['ArrowUp'])    { vy = -1; }
+    if (keys['ArrowDown'])  { vy =  1; }
+    if (vx !== 0 && vy !== 0) { const inv = 1/Math.SQRT2; vx *= inv; vy *= inv; }
+
+    const onPath = isOnPath(bunny.x, bunny.y);
+    const speed = onPath ? L.bunnyPath : L.bunnyGrass;
+    bunny.x += vx * speed * dt;
+    bunny.y += vy * speed * dt;
+    bunny.x = Math.max(14, Math.min(W - 14, bunny.x));
+    bunny.y = Math.max(14, Math.min(H - 14, bunny.y));
+    if (vx !== 0 || vy !== 0) bunny.hopT += dt * 14;
+
+    if (onPath) grassTime = 0;
+    else grassTime += dt;
+
+    // Carrot pickup + respawn
+    carrots.forEach(c => {
+      if (c.eaten) return;
+      const dx = c.x - bunny.x, dy = c.y - bunny.y;
+      if (dx*dx + dy*dy < 22*22) {
+        c.eaten = true;
+        score++;
+        scoreEl.textContent = score;
+        playCrunch();
+        if (score >= L.target) {
+          state = 'levelClear';
+          playLevelChime();
+          const isLast = level + 1 >= LEVELS.length;
+          if (isLast) {
+            showOverlay('YOU ESCAPED!', 'GAME COMPLETE',
+              `Clover cleared all 5 levels and reached the hidden meadow. The forest is safe.`,
+              [{ label: 'PLAY AGAIN', onClick: () => { loadLevel(0); startCountdown(); restartMusic(); } }]);
+          } else {
+            const next = LEVELS[level + 1];
+            showOverlay(`LEVEL ${level + 1} CLEAR`, next.name,
+              `Next: ${next.target} carrots, faster fox, twistier path.`,
+              [{ label: 'NEXT LEVEL', onClick: () => advanceLevel() }]);
+          }
+          return;
+        }
+        if (L.respawn > 0 && score < L.target) {
+          const aliveCount = carrots.filter(k => !k.eaten && k.respawnAt === 0).length;
+          if (aliveCount < L.visible) c.respawnAt = performance.now() + 350;
+        }
+      }
+    });
+
+    const now = performance.now();
+    carrots.forEach(c => {
+      if (c.eaten && c.respawnAt > 0 && now >= c.respawnAt) respawnCarrot(c);
+    });
+
+    // Fox chase — path-locked (cannot cut the inside of curves).
+    // The fox advances along the path's arc length toward the bunny's arc
+    // position. It only leaves the path when the bunny is in the grass AND
+    // the fox is right at the bunny's path-projection — then it switches to
+    // direct pursuit at `foxGrass` speed to enforce the 4-sec-grass-catch rule.
+    const bunnyArc = arcFromPos(bunny.x, bunny.y);
+    const arcDiff = bunnyArc - fox.arc;
+    const ARC_GRAB_RANGE = 70; // how close (in path-arc px) the fox must be before leaving the path
+
+    if (!onPath && Math.abs(arcDiff) < ARC_GRAB_RANGE) {
+      // Off-path direct pursuit
+      const dx = bunny.x - fox.x, dy = bunny.y - fox.y;
+      const d = Math.hypot(dx, dy) || 1;
+      fox.x += (dx / d) * L.foxGrass * dt;
+      fox.y += (dy / d) * L.foxGrass * dt;
+      fox.arc = arcFromPos(fox.x, fox.y);
+    } else {
+      // Path-locked advance
+      const step = L.fox * dt;
+      if (arcDiff > 0)      fox.arc = Math.min(bunnyArc, fox.arc + step);
+      else if (arcDiff < 0) fox.arc = Math.max(bunnyArc, fox.arc - step);
+      const fp = pathPosFromArc(fox.arc);
+      fox.x = fp.x;
+      fox.y = fp.y;
+    }
+    fox.pounceT += dt * 12;
+
+    const fd = Math.hypot(bunny.x - fox.x, bunny.y - fox.y);
+    distEl.textContent = Math.round(fd);
+
+    if (fd < 22) {
+      state = 'lost';
+      playAww();
+      const buttons = [
+        { label: 'TRY AGAIN', onClick: () => retryCurrentLevel() },
+      ];
+      if (level > 0) {
+        buttons.push({ label: 'RESTART FROM L1', alt: true, onClick: () => { loadLevel(0); startCountdown(); restartMusic(); } });
+      }
+      showOverlay('GAME OVER', `CAUGHT ON LEVEL ${level + 1}`,
+        `The fox closed in. Stay on the path — the grass slows you down.`,
+        buttons);
+    }
+  }
+
+  // -------- DRAW --------
+  function drawGrass() {
+    ctx.fillStyle = '#7cc36a';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#66b057';
+    for (let i = 0; i < 50; i++) {
+      const x = (i * 173) % W;
+      const y = (i * 97 + 40) % H;
+      ctx.fillRect(x, y, 18, 6);
+    }
+  }
+
+  function drawPath() {
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#a87348';
+    ctx.lineWidth = 48;
+    ctx.beginPath();
+    ctx.moveTo(pathPoints[0].x, pathPoints[0].y);
+    for (let i = 1; i < pathPoints.length; i++) ctx.lineTo(pathPoints[i].x, pathPoints[i].y);
+    ctx.stroke();
+    ctx.strokeStyle = '#c18a5b';
+    ctx.lineWidth = 36;
+    ctx.stroke();
+
+    ctx.fillStyle = '#7c5030';
+    for (let i = 0; i < pathPoints.length - 1; i++) {
+      const a = pathPoints[i], b = pathPoints[i+1];
+      for (let t = 0; t < 1; t += 0.08) {
+        const x = a.x + (b.x - a.x) * t + rand(-10, 10);
+        const y = a.y + (b.y - a.y) * t + rand(-10, 10);
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+  }
+
+  function drawFlower(f) {
+    ctx.fillStyle = f.c;
+    ctx.fillRect(f.x - 2, f.y - 2, 2, 2);
+    ctx.fillRect(f.x + 2, f.y - 2, 2, 2);
+    ctx.fillRect(f.x - 2, f.y + 2, 2, 2);
+    ctx.fillRect(f.x + 2, f.y + 2, 2, 2);
+    ctx.fillStyle = '#ffdc4a';
+    ctx.fillRect(f.x, f.y, 2, 2);
+  }
+
+  function drawBush(b) {
+    ctx.fillStyle = '#3f8f3a';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.arc(b.x - b.r*0.6, b.y + 2, b.r*0.8, 0, Math.PI * 2);
+    ctx.arc(b.x + b.r*0.6, b.y + 2, b.r*0.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#5cb154';
+    ctx.beginPath();
+    ctx.arc(b.x - 2, b.y - 2, b.r*0.4, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawTree(t) {
+    ctx.fillStyle = '#6d3a1a';
+    ctx.fillRect(t.x - 5, t.y, 10, t.h * 0.45);
+    ctx.fillStyle = '#2f6f2a';
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 22, 0, Math.PI * 2);
+    ctx.arc(t.x - 14, t.y + 8, 18, 0, Math.PI * 2);
+    ctx.arc(t.x + 14, t.y + 8, 18, 0, Math.PI * 2);
+    ctx.arc(t.x, t.y - 14, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#4aa041';
+    ctx.beginPath();
+    ctx.arc(t.x - 4, t.y - 6, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawCarrot(c) {
+    if (c.eaten) return;
+    ctx.fillStyle = '#ff8a1e';
+    ctx.beginPath();
+    ctx.moveTo(c.x - 6, c.y - 6);
+    ctx.lineTo(c.x + 6, c.y - 6);
+    ctx.lineTo(c.x, c.y + 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffb04a';
+    ctx.fillRect(c.x - 4, c.y - 5, 2, 10);
+    ctx.fillStyle = '#4aa041';
+    ctx.fillRect(c.x - 4, c.y - 10, 2, 4);
+    ctx.fillRect(c.x - 1, c.y - 12, 2, 6);
+    ctx.fillRect(c.x + 2, c.y - 10, 2, 4);
+  }
+
+  function drawBunny() {
+    const hop = Math.sin(bunny.hopT) * 2;
+    const x = bunny.x, y = bunny.y + hop;
+    const dir = bunny.dir;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 10, 10, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f5f0e6';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 11, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x + 7 * dir, y - 3, 7, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f5f0e6';
+    ctx.fillRect(x + 4 * dir, y - 14, 3, 8);
+    ctx.fillRect(x + 9 * dir, y - 14, 3, 8);
+    ctx.fillStyle = '#ffc2d1';
+    ctx.fillRect(x + 5 * dir, y - 13, 1, 6);
+    ctx.fillRect(x + 10 * dir, y - 13, 1, 6);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(x + 9 * dir, y - 4, 2, 2);
+    ctx.fillStyle = '#ff7f9e';
+    ctx.fillRect(x + 12 * dir, y - 1, 2, 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x - 10 * dir, y + 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e8dfcf';
+    ctx.fillRect(x - 6, y + 7, 4, 3);
+    ctx.fillRect(x + 2, y + 7, 4, 3);
+  }
+
+  function drawFox() {
+    const wiggle = Math.sin(fox.pounceT) * 1.2;
+    const x = fox.x, y = fox.y + wiggle;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 12, 14, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d1592b';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 14, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const hd = bunny.x > fox.x ? 1 : -1;
+    ctx.beginPath();
+    ctx.ellipse(x + 10 * hd, y - 3, 8, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff3e8';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 3, 9, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff3e8';
+    ctx.beginPath();
+    ctx.ellipse(x + 14 * hd, y - 2, 4, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#a23f1f';
+    ctx.beginPath();
+    ctx.moveTo(x + 6 * hd, y - 9);
+    ctx.lineTo(x + 10 * hd, y - 15);
+    ctx.lineTo(x + 12 * hd, y - 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 13 * hd, y - 9);
+    ctx.lineTo(x + 16 * hd, y - 15);
+    ctx.lineTo(x + 18 * hd, y - 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.fillRect(x + 11 * hd, y - 4, 2, 2);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(x + 17 * hd, y - 2, 2, 2);
+    ctx.fillStyle = '#d1592b';
+    ctx.beginPath();
+    ctx.ellipse(x - 14 * hd, y, 7, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff3e8';
+    ctx.beginPath();
+    ctx.arc(x - 19 * hd, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawGrassWarning() {
+    if (state !== 'playing' || grassTime < 0.6) return;
+    const intensity = Math.min(1, (grassTime - 0.6) / 3.4);
+    const alpha = 0.18 * intensity + 0.06 * Math.sin(performance.now() / 120) * intensity;
+    const grd = ctx.createRadialGradient(W/2, H/2, 200, W/2, H/2, 480);
+    grd.addColorStop(0, 'rgba(0,0,0,0)');
+    grd.addColorStop(1, `rgba(180, 30, 30, ${Math.max(0, alpha)})`);
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawCountdown() {
+    if (state !== 'countdown') return;
+    const remainMs = Math.max(0, countdownEnd - performance.now());
+    const num = Math.ceil(remainMs / 1000);
+    const subSec = (remainMs % 1000) / 1000; // 1.0 -> 0.0 within the current second
+    const label = num > 0 ? String(num) : 'GO!';
+
+    // dim the world
+    ctx.fillStyle = 'rgba(10, 20, 10, 0.45)';
+    ctx.fillRect(0, 0, W, H);
+
+    // header
+    const L = LEVELS[level];
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillText(`LEVEL ${level + 1}  —  ${L.name}`, W/2, H/2 - 130);
+
+    ctx.fillStyle = '#c9a86a';
+    ctx.font = '15px "Courier New", monospace';
+    ctx.fillText(`COLLECT ${L.target} CARROTS  •  STAY ON THE PATH`, W/2, H/2 - 95);
+
+    // Big pulsing number — scale up at the start of each second, settle by the end.
+    const pulse = num > 0 ? (1.0 + 0.35 * subSec) : 1.0;
+    ctx.save();
+    ctx.translate(W/2, H/2 + 10);
+    ctx.scale(pulse, pulse);
+    ctx.fillStyle = num > 0 ? '#ffd27f' : '#9be15d';
+    ctx.font = 'bold 140px "Courier New", monospace';
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+
+    // hint
+    ctx.fillStyle = '#a89060';
+    ctx.font = '12px "Courier New", monospace';
+    ctx.fillText('GET READY', W/2, H/2 + 130);
+  }
+
+  function drawIntro() {
+    if (state !== 'intro') return;
+
+    // Top title plate
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, 64);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffd27f';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillText('BUNNY DASH: FOREST ESCAPE', W/2, 26);
+    ctx.fillStyle = '#c9a86a';
+    ctx.font = '12px "Courier New", monospace';
+    ctx.fillText('CLOVER’S TALE', W/2, 50);
+
+    if (storyT >= STORY_TOTAL) {
+      // Begin prompt
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, H - 130, W, 130);
+      const blink = 0.6 + 0.4 * Math.sin(performance.now() / 350);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 22px "Courier New", monospace';
+      ctx.fillText('Clover takes a deep breath …', W/2, H - 90);
+      ctx.fillStyle = `rgba(255, 210, 127, ${blink})`;
+      ctx.font = 'bold 18px "Courier New", monospace';
+      ctx.fillText('CLICK OR PRESS SPACE TO BEGIN', W/2, H - 50);
+      return;
+    }
+
+    const lineIdx = Math.min(STORY_LINES.length - 1, Math.floor(storyT / STORY_PER_LINE));
+    const localT = storyT - lineIdx * STORY_PER_LINE;
+    let alpha = 1;
+    if (localT < STORY_FADE_IN) alpha = localT / STORY_FADE_IN;
+    else if (localT > STORY_FADE_IN + STORY_HOLD) {
+      alpha = 1 - (localT - STORY_FADE_IN - STORY_HOLD) / STORY_FADE_OUT;
+    }
+    alpha = Math.max(0, Math.min(1, alpha));
+
+    // Bottom subtitle bar (always visible during intro for stable framing)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(0, H - 110, W, 110);
+
+    // The line itself
+    ctx.fillStyle = `rgba(245, 240, 230, ${alpha})`;
+    ctx.font = '20px "Courier New", monospace';
+    ctx.fillText(STORY_LINES[lineIdx], W/2, H - 65);
+
+    // progress dots
+    const dotsY = H - 28;
+    const dotW = 10, gap = 6;
+    const total = STORY_LINES.length;
+    const totalW = total * dotW + (total - 1) * gap;
+    const startX = W/2 - totalW/2 + dotW/2;
+    for (let i = 0; i < total; i++) {
+      ctx.fillStyle = i <= lineIdx ? '#ffd27f' : 'rgba(255,255,255,0.25)';
+      ctx.fillRect(startX + i * (dotW + gap) - dotW/2, dotsY - 2, dotW, 4);
+    }
+
+    // skip hint
+    ctx.fillStyle = 'rgba(201, 168, 106, 0.7)';
+    ctx.font = '11px "Courier New", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText('CLICK / SPACE TO SKIP', W - 16, H - 12);
+    ctx.textAlign = 'left';
+  }
+
+  function draw() {
+    if (state === 'intro') {
+      drawIntroScene();
+      drawIntro();
+      return;
+    }
+
+    drawGrass();
+    flowers.forEach(drawFlower);
+    bushes.forEach(drawBush);
+    drawPath();
+    trees.forEach(drawTree);
+    carrots.forEach(drawCarrot);
+    drawFox();
+    drawBunny();
+
+    // base vignette
+    const grd = ctx.createRadialGradient(W/2, H/2, 200, W/2, H/2, 500);
+    grd.addColorStop(0, 'rgba(0,0,0,0)');
+    grd.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, W, H);
+
+    drawGrassWarning();
+    drawCountdown();
+  }
+
+  // -------- LOOP --------
+  let last = performance.now();
+  function loop(ts) {
+    const dt = Math.min(0.05, (ts - last) / 1000);
+    last = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // Initialize: prepare level 1 + intro cinematic world
+  loadLevel(0);
+  buildIntroWorld();
+  state = 'intro';
+  storyT = 0;
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
