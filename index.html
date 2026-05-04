@@ -99,6 +99,7 @@
     </div>
     <div id="overlay" class="hidden"></div>
   </div>
+  <audio id="bgm" src="music.mp3" loop preload="auto"></audio>
   <footer>ARROWS TO MOVE &nbsp; • &nbsp; M TO MUTE &nbsp; • &nbsp; R TO RESTART LEVEL</footer>
 
 <script>
@@ -112,6 +113,8 @@
   const distEl = document.getElementById('dist');
   const overlay = document.getElementById('overlay');
   const hud = document.getElementById('hud');
+  const bgm = document.getElementById('bgm');
+  bgm.volume = 0.45;
 
   // -------- LEVEL CONFIG --------
   // Speeds in px/sec. Fox is PATH-LOCKED — it follows the dirt path's arc, so it
@@ -339,6 +342,7 @@
   function toggleMute() {
     muted = !muted;
     if (audioCtx && musicGain) musicGain.gain.value = muted ? 0 : 0.14;
+    bgm.muted = muted;
   }
 
   const bassPattern = [
@@ -387,15 +391,13 @@
   function startMusic() {
     ensureAudio();
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    if (musicInterval) clearInterval(musicInterval);
-    tickMusic();
-    musicInterval = setInterval(tickMusic, LEVELS[level].musicMs);
+    bgm.muted = muted;
+    bgm.play().catch(() => { /* autoplay blocked until user gesture; will retry on next click */ });
   }
   function restartMusic() {
-    if (!audioCtx) return;
-    if (musicInterval) clearInterval(musicInterval);
-    tickMusic();
-    musicInterval = setInterval(tickMusic, LEVELS[level].musicMs);
+    // The mp3 is set to loop continuously, so transitions between levels
+    // don't need to restart it — just make sure it's still playing.
+    if (bgm.paused) bgm.play().catch(() => {});
   }
 
   function playCrunch() {
